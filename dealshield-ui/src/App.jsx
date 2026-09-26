@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Activity, Network, ScrollText } from 'lucide-react'
 import { api } from './api'
 import Sidebar from './components/Sidebar'
 import Hero from './components/Hero'
@@ -7,9 +8,9 @@ import GraphExplorerTab from './components/GraphExplorerTab'
 import AgentEventsTab from './components/AgentEventsTab'
 
 const TABS = [
-  { id: 'analysis', label: '🔍 Risk Analysis' },
-  { id: 'graph', label: '🕸️ Graph Explorer' },
-  { id: 'events', label: '📋 Agent Events' },
+  { id: 'analysis', label: 'Risk Analysis', icon: Activity },
+  { id: 'graph', label: 'Graph Explorer', icon: Network },
+  { id: 'events', label: 'Agent Events', icon: ScrollText },
 ]
 
 export default function App() {
@@ -18,17 +19,13 @@ export default function App() {
   const [graphStats, setGraphStats] = useState(null)
   const [neo4jStatus, setNeo4jStatus] = useState('checking')
 
-  // Pipeline state
   const [pipelineRunning, setPipelineRunning] = useState(false)
   const [pipelineResult, setPipelineResult] = useState(null)
   const [pipelineError, setPipelineError] = useState(null)
   const [stageStatus, setStageStatus] = useState({
-    coc: 'pending',
-    secondary: 'pending',
-    scoring: 'pending',
+    coc: 'pending', secondary: 'pending', scoring: 'pending',
   })
 
-  // Fetch graph stats on mount
   useEffect(() => {
     api.graphStats()
       .then((data) => {
@@ -38,7 +35,6 @@ export default function App() {
       .catch(() => setNeo4jStatus('error'))
   }, [])
 
-  // Run the full pipeline
   const runPipeline = async () => {
     setPipelineRunning(true)
     setPipelineError(null)
@@ -46,15 +42,12 @@ export default function App() {
     setStageStatus({ coc: 'running', secondary: 'pending', scoring: 'pending' })
 
     try {
-      // Stage 1: CoC
       const cocResult = await api.analyzeCoc(targetCompany)
       setStageStatus((s) => ({ ...s, coc: 'complete', secondary: 'running' }))
 
-      // Stage 2: Secondary
       const secResult = await api.analyzeSecondary(targetCompany)
       setStageStatus((s) => ({ ...s, secondary: 'complete', scoring: 'running' }))
 
-      // Stage 3: Scoring (3 predefined risks)
       const risksToScore = [
         {
           company_id: 'COMP-002', clause_id: 'CL-402', risk_id: 'RISK-CALC-001',
@@ -89,11 +82,7 @@ export default function App() {
       }
 
       setStageStatus({ coc: 'complete', secondary: 'complete', scoring: 'complete' })
-      setPipelineResult({
-        coc: cocResult,
-        secondary: secResult,
-        scored: scoredRisks,
-      })
+      setPipelineResult({ coc: cocResult, secondary: secResult, scored: scoredRisks })
     } catch (err) {
       setPipelineError(err.message)
       setStageStatus((prev) => {
@@ -126,6 +115,7 @@ export default function App() {
               className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
               onClick={() => setActiveTab(tab.id)}
             >
+              <tab.icon size={16} />
               {tab.label}
             </button>
           ))}
@@ -141,12 +131,8 @@ export default function App() {
             onRun={runPipeline}
           />
         )}
-
         {activeTab === 'graph' && <GraphExplorerTab />}
-
-        {activeTab === 'events' && (
-          <AgentEventsTab pipelineResult={pipelineResult} />
-        )}
+        {activeTab === 'events' && <AgentEventsTab pipelineResult={pipelineResult} />}
       </main>
     </div>
   )

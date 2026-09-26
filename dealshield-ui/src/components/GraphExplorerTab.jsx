@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Database, Play, AlertCircle, FileSearch } from 'lucide-react'
 import { api } from '../api'
 
 export default function GraphExplorerTab() {
@@ -13,10 +14,15 @@ export default function GraphExplorerTab() {
     api.graphPresets()
       .then((data) => {
         const list = data.presets || []
-        setPresets(list)
-        if (list.length > 0) {
-          setSelectedPreset(list[0].id)
-          setQuery(list[0].query)
+        // Clean up preset labels from emojis if any
+        const cleaned = list.map(p => ({
+          ...p,
+          label: p.label.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6}-\u{1F1FF}\u{1F900}-\u{1F9FF}\u{1F018}-\u{1F270}\u{238C}\u{2B06}\u{2B05}\u{2B07}\u{2B00}-\u{2B04}\u{2934}\u{2935}\u{2194}-\u{2199}\u{21A9}\u{21AA}\u{25AA}\u{25AB}\u{25FB}-\u{25FE}\u{25B6}\u{25C0}\u{23E9}-\u{23F3}\u{23F8}-\u{23FA}\u{200D}]/gu, '').trim()
+        }))
+        setPresets(cleaned)
+        if (cleaned.length > 0) {
+          setSelectedPreset(cleaned[0].id)
+          setQuery(cleaned[0].query)
         }
       })
       .catch(() => {})
@@ -47,35 +53,45 @@ export default function GraphExplorerTab() {
 
   return (
     <div>
-      <h3 className="section-title">🕸️ Neo4j Graph Explorer</h3>
-      <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+      <div className="section-header">
+        <Database size={20} className="section-icon" />
+        <h3 className="section-title">Neo4j Graph Explorer</h3>
+      </div>
+      <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
         Run custom Cypher queries against the DealShield knowledge graph in Neo4j Aura.
       </p>
 
-      <select className="explorer-select" value={selectedPreset} onChange={handlePresetChange}>
-        {presets.map((p) => (
-          <option key={p.id} value={p.id}>{p.label}</option>
-        ))}
-      </select>
+      <div className="explorer-controls">
+        <select className="explorer-select" value={selectedPreset} onChange={handlePresetChange}>
+          {presets.map((p) => (
+            <option key={p.id} value={p.id}>{p.label}</option>
+          ))}
+        </select>
+      </div>
 
       <textarea
         className="explorer-textarea"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        rows={4}
+        rows={5}
+        spellCheck={false}
       />
 
-      <button className="btn-execute" onClick={execute} disabled={loading}>
-        {loading ? <><span className="spinner">⟳</span> Executing...</> : <>▶️ Execute Query</>}
+      <button className="btn-secondary" onClick={execute} disabled={loading} style={{ marginBottom: '2rem' }}>
+        {loading ? (
+          <><span className="spinner" style={{ display: 'inline-block' }}><Database size={16} /></span> Executing</>
+        ) : (
+          <><Play size={16} /> Execute Query</>
+        )}
       </button>
 
       {error && (
         <div style={{
-          background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)',
-          borderRadius: 'var(--radius-md)', padding: '0.75rem 1rem', marginBottom: '1rem',
-          color: '#fca5a5', fontSize: '0.82rem',
+          background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)',
+          borderRadius: 'var(--radius-md)', padding: '1rem', marginBottom: '1.5rem',
+          color: '#f87171', fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '8px'
         }}>
-          Cypher error: {error}
+          <AlertCircle size={16} /> Cypher error: {error}
         </div>
       )}
 
@@ -103,13 +119,16 @@ export default function GraphExplorerTab() {
               </tbody>
             </table>
           </div>
-          <div className="table-count">{results.count} record(s) returned</div>
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.75rem', textAlign: 'right' }}>
+            {results.count} record(s) returned
+          </div>
         </>
       )}
 
       {results && results.count === 0 && (
-        <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', padding: '1rem', textAlign: 'center' }}>
-          Query returned no results.
+        <div className="empty-state" style={{ padding: '3rem 2rem' }}>
+          <FileSearch size={32} className="empty-state-icon" />
+          <div className="empty-state-text">Query returned no results.</div>
         </div>
       )}
     </div>

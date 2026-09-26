@@ -1,43 +1,55 @@
+import { Shield, Layers, Database, Activity, Target } from 'lucide-react'
+
 export default function Sidebar({ targetCompany, setTargetCompany, graphStats, neo4jStatus }) {
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <div className="sidebar-brand-icon">🛡️</div>
-        <div className="sidebar-brand-name">DealShield</div>
-        <div className="sidebar-brand-sub">M&A Due Diligence AI</div>
+        <div className="sidebar-brand-icon">
+          <Shield size={24} />
+        </div>
+        <div className="sidebar-brand-text">
+          <div className="sidebar-brand-name">DealShield</div>
+          <div className="sidebar-brand-sub">M&A Due Diligence</div>
+        </div>
       </div>
-
-      <div className="sidebar-divider" />
 
       <div className="sidebar-input-group">
-        <label>🎯 Target Company</label>
-        <input
-          className="sidebar-input"
-          value={targetCompany}
-          onChange={(e) => setTargetCompany(e.target.value)}
-          placeholder="e.g. TargetTech Inc."
-        />
+        <label>Target Company</label>
+        <div style={{ position: 'relative' }}>
+          <Target size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+          <input
+            className="sidebar-input"
+            style={{ paddingLeft: '2rem' }}
+            value={targetCompany}
+            onChange={(e) => setTargetCompany(e.target.value)}
+            placeholder="e.g. TargetTech Inc."
+          />
+        </div>
       </div>
 
       <div className="sidebar-divider" />
 
-      <div className="sidebar-section-label">⚡ Tech Stack</div>
+      <div className="sidebar-section-label">
+        <Layers size={14} /> Stack Components
+      </div>
       {[
-        { dot: '#6366f1', label: 'Google ADK SequentialAgent' },
-        { dot: '#3b82f6', label: 'Neo4j Aura Cloud Graph' },
-        { dot: '#06b6d4', label: 'GraphRAG Multi-hop Cypher' },
-        { dot: '#8b5cf6', label: 'Neo4j Agent Memory' },
-        { dot: '#10b981', label: 'Gemini 2.5 Flash' },
-      ].map(({ dot, label }) => (
+        { label: 'Google ADK Agents' },
+        { label: 'Neo4j Aura Graph' },
+        { label: 'GraphRAG Engine' },
+        { label: 'Agent Memory' },
+        { label: 'Gemini LLM' },
+      ].map(({ label }) => (
         <div key={label} className="sidebar-stack-item">
-          <span className="sidebar-stack-dot" style={{ background: dot }} />
+          <Activity size={14} className="sidebar-stack-icon" />
           {label}
         </div>
       ))}
 
       <div className="sidebar-divider" />
 
-      <div className="sidebar-section-label">📊 Graph Stats</div>
+      <div className="sidebar-section-label">
+        <Database size={14} /> Knowledge Graph
+      </div>
       {graphStats ? (
         <>
           <div className="sidebar-stats">
@@ -55,19 +67,19 @@ export default function Sidebar({ targetCompany, setTargetCompany, graphStats, n
             </div>
             <div className="sidebar-stat">
               <div className="sidebar-stat-value">{graphStats.doc_chunks ?? 0}</div>
-              <div className="sidebar-stat-label">Doc Chunks</div>
+              <div className="sidebar-stat-label">Documents</div>
             </div>
           </div>
           <div className="sidebar-status">
             <span className={`status-dot ${neo4jStatus === 'connected' ? 'connected' : 'error'}`} />
-            <span style={{ color: neo4jStatus === 'connected' ? '#10b981' : '#ef4444', fontSize: '0.75rem' }}>
-              {neo4jStatus === 'connected' ? 'Neo4j Connected' : 'Connection Error'}
+            <span style={{ color: neo4jStatus === 'connected' ? 'var(--text-secondary)' : 'var(--accent-red)' }}>
+              {neo4jStatus === 'connected' ? 'Connected to Aura' : 'Connection Error'}
             </span>
           </div>
         </>
       ) : (
-        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textAlign: 'center', padding: '0.5rem' }}>
-          {neo4jStatus === 'checking' ? 'Connecting...' : 'Failed to load stats'}
+        <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+          {neo4jStatus === 'checking' ? 'Connecting to DB...' : 'Failed to load stats'}
         </div>
       )}
     </aside>
