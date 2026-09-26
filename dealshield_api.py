@@ -319,6 +319,7 @@ def get_presets():
 
 
 # ─── Serve React build (production) ─────────────────────────────────────
-react_dist = os.path.join(os.path.dirname(__file__), "dealshield-ui", "dist")
-if os.path.isdir(react_dist):
-    app.mount("/", StaticFiles(directory=react_dist, html=True), name="react")
+# ─── Serve Static UI (Vanilla JS) ─────────────────────────────────────────
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.isdir(static_dir):
+    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DealShield API Dashboard</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>DealShield</h1>
+            <p>Enterprise M&A Due Diligence API Dashboard</p>
+        </header>
+
+        <main>
+            <div class="panel">
+                <h2>API Status</h2>
+                <div id="health-status">Checking...</div>
+            </div>
+
+            <div class="panel">
+                <h2>Analyze Target</h2>
+                <input type="text" id="target-input" value="TargetTech Inc." />
+                <button id="run-pipeline-btn">Run Pipeline</button>
+                <div id="pipeline-status"></div>
+                <pre id="pipeline-output"></pre>
+            </div>
+        </main>
+    </div>
+    <script src="/app.js"></script>
+</body>
+</html>

@@ -387,9 +387,10 @@ def calculate_and_store_risk_factor(
 
     # ── Write-back to Neo4j Aura ──
     write_query = """
-    MATCH (c:Company {id: $company_id})
+    MERGE (c:Company {id: $company_id})
     OPTIONAL MATCH (cl:Clause {id: $clause_id})
     OPTIONAL MATCH (dc:DocumentChunk {id: $source_chunk_id})
+    MERGE (tx:Transaction {id: 'TXN-' + $company_id})
     MERGE (r:RiskFactor {id: $risk_id})
     SET r.category = $category,
         r.severity = $severity,
@@ -402,8 +403,10 @@ def calculate_and_store_risk_factor(
         r.description = $rationale,
         r.status = 'ACTIVE',
         r.updated_by = 'DealShield_GoogleADK_Agent',
-        r.calculated_at = toString(datetime())
+        r.calculated_at = toString(datetime()),
+        tx.status = 'FLAGGED'
     MERGE (c)-[:HAS_CALCULATED_RISK {score: $risk_score, severity: $severity}]->(r)
+    MERGE (tx)-[:HAS_RISK_FACTOR]->(r)
     FOREACH (_ IN CASE WHEN cl IS NOT NULL THEN [1] ELSE [] END |
         MERGE (cl)-[:RESTRICTED_BY {impact: 'Triggers Calculated Risk'}]->(r)
     )
