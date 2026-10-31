@@ -36,11 +36,11 @@ from neo4j_agent_memory.integrations.google_adk import Neo4jMemoryService
 load_dotenv()
 
 NEO4J_URI = os.getenv("NEO4J_URI", "")
-NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "neo4j")
+NEO4J_USERNAME = os.getenv("NEO4J_USER") or os.getenv("NEO4J_USERNAME", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", os.getenv("GEMINI_API_KEY", ""))
-LLM_MODEL = "gemini-3.1-flash-lite"
+LLM_MODEL = os.getenv("GEMINI_MODEL") or os.getenv("LLM_MODEL") or os.getenv("GOOGLE_GENAI_MODEL") or "gemini-2.5-flash"
 APP_NAME = "dealshield"
 
 # Ensure Gemini API key is available for google-genai
@@ -86,90 +86,122 @@ def write_cypher(query: str, params: dict | None = None) -> list[dict]:
 # TOOL 1 – Change-of-Control GraphRAG Analysis
 # ═══════════════════════════════════════════════════════════════════════════
 def analyze_change_of_control_graphrag(
-    target_company: str = "TargetTech Inc.",
+    target_company: str = "Northwind Microsystems Inc.",
 ) -> dict:
     """
     Multi-hop Cypher query that:
-    1. Finds all Change-of-Control clauses restricting the target company.
+    1. Finds all Change-of-Control clauses restricting the target company via agreements.
     2. Traverses 1–4 hops to detect undisclosed related-party supplier conflicts.
-    3. Returns structured JSON with director, spouse, shell/holding chain,
+    3. Returns structured JSON with director, spouse/relative, shell/holding chain,
        annual supplier value, CoC termination penalty, and DocumentChunk citations.
     """
 
     # ── Step 1: Change-of-Control clauses + DocumentChunk evidence ──
     coc_query = """
-    MATCH (t:Company {name: $target})-[:RESTRICTED_BY]->(cl:Clause)
-    WHERE cl.clause_type = 'Change of Control'
-    OPTIONAL MATCH (cl)-[:EXTRACTED_FROM]->(dc:DocumentChunk)
-    RETURN cl {.id, .title, .clause_type, .financial_exposure_usd, .summary} AS clause,
-           collect(DISTINCT dc {.id, .source_doc, .page, .text}) AS doc_chunks
+    MATCH (t:Company)
+    WHERE t.name = $target OR t.name CONTAINS $target OR $target CONTAINS t.name
+    MATCH (c:Clause)-[:CLAUSE_OF]->(a:Agreement)-[:AGREEMENT_OF]->(t)
+    WHERE c.clauseType IN ['COC_POISON_PILL', 'COC_VENDOR_LOCKIN', 'Change of Control']
+       OR c.triggerType = 'EQUITY_TRANSFER'
+    OPTIONAL MATCH (c)-[:DERIVED_FROM]->(dc:DocumentChunk)
+    RETURN c {.id, .title, .clauseType, .section, .text, .triggerType, .thresholdPct,
+              .penaltyUSD, .minAnnualPurchaseUSD, .durationMonths, .severity,
+              financial_exposure_usd: coalesce(
+                  c.penaltyUSD,
+                  (coalesce(c.minAnnualPurchaseUSD, 0) * coalesce(c.durationMonths, 12) / 12),
+                  c.financial_exposure_usd,
+                  0
+              ),
+              summary: coalesce(c.text, c.summary, c.title)} AS clause,
+           collect(DISTINCT dc {.id, .docId, .page, .text}) AS doc_chunks
     """
     coc_results = run_cypher(coc_query, {"target": target_company})
 
     # ── Step 2: Multi-hop related-party conflict rings ──
-    # Director -> Target <- Supplier <- Holding(1..2 hops) <- Related Party <- Director (spouse link)
+    # Person (works at or director of Target) -> [optional spouse/family] -> holds stake (1..3 hops) -> Vendor -> supplies to Target
     conflict_query = """
-    MATCH (d:Executive)-[:DIRECTOR_OF]->(t:Company {name: $target})
-          <-[sup_rel:SUPPLIES_TO]-(sup:Company)
-          <-[:HOLDS_STAKE_IN*1..2]-(rel_party)
-          <-[:DIRECTOR_OF]-(d)
-    WHERE rel_party:Executive OR rel_party:Company
-    // Collect the full holding chain between rel_party and sup
-    OPTIONAL MATCH chain = (rel_party)-[:HOLDS_STAKE_IN*1..2]->(sup)
-    WITH d, t, sup, sup_rel, rel_party,
-         [node IN nodes(chain) WHERE node <> rel_party AND node <> sup | node {.id, .name, labels: labels(node)}] AS intermediaries,
-         [rel IN relationships(chain) | rel {.percentage, .status}] AS stake_details
-    // Get the spouse/related-party link details
-    OPTIONAL MATCH (d)-[spouse_link:DIRECTOR_OF]->(rel_party)
-    WHERE spouse_link.role CONTAINS 'Spouse' OR spouse_link.role CONTAINS 'Related Party'
-        OR spouse_link.role CONTAINS 'Family'
-    // Get CoC clauses for quantification
-    OPTIONAL MATCH (t)-[:RESTRICTED_BY]->(coc_clause:Clause {clause_type: 'Change of Control'})
-    OPTIONAL MATCH (coc_clause)-[:EXTRACTED_FROM]->(coc_doc:DocumentChunk)
+    MATCH (d:Person)-[:WORKS_AT|DIRECTOR_OF]->(t:Company)
+    WHERE t.name = $target OR t.name CONTAINS $target OR $target CONTAINS t.name
+    MATCH (sup:Company)-[sup_rel:SUPPLIES_TO]->(t)
+    OPTIONAL MATCH (d)-[rel_link:RELATED_TO]-(rel_p:Person)
+    WITH d, t, sup, sup_rel, coalesce(rel_p, d) AS benef_owner, rel_link, (rel_p IS NOT NULL) AS has_relative
+    MATCH chain = (benef_owner)-[:HOLDS_STAKE_IN*1..3]->(sup)
+    WHERE NOT EXISTS { (d)-[:FILED]->(:Disclosure)-[:DECLARES]->(sup) }
+    OPTIONAL MATCH (tx:Transaction)-[:APPROVED_BY]->(d)
+    WHERE (tx)-[:WITH_VENDOR]->(sup)
+    OPTIONAL MATCH (coc_cl:Clause)-[:CLAUSE_OF]->(a:Agreement)-[:AGREEMENT_OF]->(sup)
+    WHERE coc_cl.clauseType IN ['COC_POISON_PILL', 'COC_VENDOR_LOCKIN', 'Change of Control']
+    OPTIONAL MATCH (coc_cl)-[:DERIVED_FROM]->(coc_dc:DocumentChunk)
+    OPTIONAL MATCH (sup)-[:DERIVED_FROM]->(sup_dc:DocumentChunk)
+    OPTIONAL MATCH (tx)-[:DERIVED_FROM]->(tx_dc:DocumentChunk)
+    WITH d, t, sup, sup_rel, benef_owner, has_relative, rel_link, chain, tx,
+         [node IN nodes(chain) WHERE node <> benef_owner AND node <> sup | node {.id, .name, labels: labels(node)}] AS intermediaries,
+         [rel IN relationships(chain) | rel {.pct, .type, .since, .percentage}] AS stake_details,
+         collect(DISTINCT coc_cl {.id, .title, .clauseType, .penaltyUSD, .minAnnualPurchaseUSD, .durationMonths,
+                 financial_exposure_usd: coalesce(
+                     coc_cl.penaltyUSD,
+                     (coalesce(coc_cl.minAnnualPurchaseUSD, 0) * coalesce(coc_cl.durationMonths, 12) / 12),
+                     coc_cl.financial_exposure_usd,
+                     0
+                 ),
+                 summary: coalesce(coc_cl.text, coc_cl.title)}) AS coc_clauses,
+         (collect(DISTINCT CASE WHEN coc_dc IS NOT NULL THEN coc_dc {.id, .docId, .page, .text} END) +
+          collect(DISTINCT CASE WHEN sup_dc IS NOT NULL THEN sup_dc {.id, .docId, .page, .text} END) +
+          collect(DISTINCT CASE WHEN tx_dc IS NOT NULL THEN tx_dc {.id, .docId, .page, .text} END)) AS raw_evidence
     RETURN
-        d {.id, .name, .title} AS director,
-        rel_party {.id, .name, .title, labels: labels(rel_party)} AS related_party,
-        spouse_link.role AS relationship_type,
-        sup {.id, .name, .role} AS supplier,
-        sup_rel {.annual_value_usd, .criticality} AS supplier_contract,
+        d {.id, .name, title: coalesce([(d)-[r:WORKS_AT]->(t)|r.title][0], [(d)-[r:DIRECTOR_OF]->(t)|r.committee][0], [(d)-[r:DIRECTOR_OF]->(t)|r.type][0], d.title, 'Executive/Director')} AS director,
+        benef_owner {.id, .name, labels: labels(benef_owner)} AS related_party,
+        (CASE WHEN has_relative THEN coalesce(rel_link.relation, 'SPOUSE') ELSE 'DIRECT_HOLDING_DUAL_FIDUCIARY' END) AS relationship_type,
+        sup {.id, .name, tier: sup_rel.tier, category: sup_rel.componentCategory} AS supplier,
+        sup_rel {.annualSpendUSD, .tier, .componentCategory, annual_value_usd: coalesce(sup_rel.annualSpendUSD, sup_rel.annual_value_usd, 0)} AS supplier_contract,
         intermediaries,
         stake_details,
-        collect(DISTINCT coc_clause {.id, .title, .financial_exposure_usd, .summary}) AS coc_clauses,
-        collect(DISTINCT coc_doc {.id, .source_doc, .page, .text}) AS coc_evidence
+        tx {.id, .type, .amountUSD, .soleSource, .description, .date} AS approved_transaction,
+        coc_clauses,
+        [x IN raw_evidence WHERE x IS NOT NULL] AS evidence_chunks
     """
     conflict_results = run_cypher(conflict_query, {"target": target_company})
 
     # ── Step 3: Build the full holding-company chain for each conflict ──
     conflicts = []
     for row in conflict_results:
-        # Reconstruct the ownership chain
         holding_chain = []
         related = row.get("related_party", {})
         intermediaries = row.get("intermediaries") or []
         stake_details = row.get("stake_details") or []
+        rel_type = row.get("relationship_type", "Beneficial Owner")
 
-        # Start: related party
+        # Start: related party / director
         holding_chain.append({
             "entity": related.get("name", "Unknown"),
             "id": related.get("id", ""),
-            "role": "Beneficial Owner (Related Party)",
+            "role": f"Beneficial Owner ({rel_type})",
         })
 
         # Intermediate holding companies
         for i, inter in enumerate(intermediaries):
-            pct = stake_details[i].get("percentage", "?") if i < len(stake_details) else "?"
+            pct = "?"
+            if i < len(stake_details):
+                st = stake_details[i]
+                pct = st.get("pct") or st.get("percentage") or "?"
             holding_chain.append({
                 "entity": inter.get("name", "Unknown"),
                 "id": inter.get("id", ""),
                 "stake_percentage": pct,
+                "role": "Intermediary Holding Company",
             })
 
         # End: supplier
         supplier = row.get("supplier", {})
+        final_pct = "?"
+        if len(stake_details) > len(intermediaries):
+            final_st = stake_details[-1]
+            final_pct = final_st.get("pct") or final_st.get("percentage") or "?"
         holding_chain.append({
             "entity": supplier.get("name", "Unknown"),
             "id": supplier.get("id", ""),
             "role": "Direct Supplier to Target",
+            "stake_percentage": final_pct,
         })
 
         coc_penalties = row.get("coc_clauses") or []
@@ -177,19 +209,22 @@ def analyze_change_of_control_graphrag(
             c.get("financial_exposure_usd", 0) for c in coc_penalties
         )
 
+        annual_val = (row.get("supplier_contract") or {}).get("annual_value_usd", 0) or 0
+        tx = row.get("approved_transaction") or {}
+        tx_amount = tx.get("amountUSD", 0) if tx else 0
+
         conflicts.append({
             "director": row.get("director", {}),
             "related_party": related,
-            "relationship_type": row.get("relationship_type", "Undisclosed"),
+            "relationship_type": rel_type,
             "holding_chain": holding_chain,
-            "holding_hops": len(intermediaries) + 2,  # related_party -> (intermediaries) -> supplier
+            "holding_hops": len(intermediaries) + (1 if rel_type == "DIRECT_HOLDING_DUAL_FIDUCIARY" else 2),
             "supplier_contract": row.get("supplier_contract", {}),
-            "annual_supplier_value_usd": (row.get("supplier_contract") or {}).get(
-                "annual_value_usd", 0
-            ),
+            "annual_supplier_value_usd": annual_val,
+            "approved_transaction_usd": tx_amount,
             "coc_termination_penalty_usd": total_coc_penalty,
             "coc_clauses": coc_penalties,
-            "document_citations": row.get("coc_evidence") or [],
+            "document_citations": [e for e in (row.get("evidence_chunks") or []) if e and e.get("id")],
         })
 
     return {
@@ -206,122 +241,196 @@ def analyze_change_of_control_graphrag(
 # TOOL 2 – Secondary & Antitrust Risk Analysis
 # ═══════════════════════════════════════════════════════════════════════════
 def analyze_secondary_and_antitrust_risks(
-    target_company: str = "TargetTech Inc.",
+    target_company: str = "Northwind Microsystems Inc.",
 ) -> dict:
     """
-    Retrieves all restrictive clauses (Anti-Trust, Governance/Fraud, Exclusivity,
-    Liquidated Damages) connected to the target company or its subsidiaries,
-    plus existing RiskFactor nodes and DocumentChunk evidence.
-    Also picks up key clauses like CL-819 and CL-205 that reference the target
-    by content even if not graph-linked.
+    Retrieves all restrictive clauses across 4 vectors:
+    1. Antitrust / Regulatory:
+       - HORIZONTAL_MARKET_CAP (common parent exceeds market share threshold)
+       - FEDERAL_CONTRACT_REVOCATION (DoD contract auto-revocation on competitor overlap)
+    2. Non-Compete & Exclusivity:
+       - AUTO_SLA_RENEWAL_IP_LOCKIN (missed notice deadline before closing)
+       - SOLE_SOURCE_EXCLUSIVITY (take-or-pay, survives change of control)
+    3. Governance & Dual Fiduciary:
+       - GOVERNANCE_ATTESTATION_FAILURE (attestation of no conflict vs related-party holding)
+       - DUAL_FIDUCIARY (non-executive director holding equity in tier-2 supplier)
     """
 
-    # ── Part A: Clauses directly linked to target or its subsidiaries ──
-    linked_query = """
-    MATCH (t:Company {name: $target})
-    OPTIONAL MATCH (t)-[:OWNS_SUBSIDIARY]->(sub:Subsidiary)
-    WITH t, collect(sub) AS subs
-
-    // Clauses on the company itself
-    OPTIONAL MATCH (t)-[:RESTRICTED_BY]->(cl:Clause)
-    WHERE cl.clause_type IN [
+    # ── Part A: Clauses connected to target or its subsidiaries ──
+    clause_query = """
+    MATCH (t:Company)
+    WHERE t.name = $target OR t.name CONTAINS $target OR $target CONTAINS t.name
+    OPTIONAL MATCH (sub:Company)-[:IS_SUBSIDIARY_OF]->(t)
+    WITH t, [t] + collect(DISTINCT sub) AS entities
+    UNWIND entities AS ent
+    MATCH (c:Clause)-[:CLAUSE_OF]->(a:Agreement)-[:AGREEMENT_OF]->(ent)
+    WHERE c.clauseType IN [
+        'HORIZONTAL_MARKET_CAP', 'FEDERAL_CONTRACT_REVOCATION',
+        'AUTO_SLA_RENEWAL_IP_LOCKIN', 'SOLE_SOURCE_EXCLUSIVITY',
+        'GOVERNANCE_ATTESTATION_FAILURE', 'DUAL_FIDUCIARY',
         'Anti-Trust / Regulatory', 'Governance / Fraud',
         'Exclusivity & Non-Compete', 'Liquidated Damages'
     ]
-    WITH t, subs, collect(DISTINCT cl) AS company_clauses
-
-    // Clauses on subsidiaries (if Subsidiary nodes can have RESTRICTED_BY)
-    UNWIND (CASE WHEN size(subs) > 0 THEN subs ELSE [null] END) AS sub
-    OPTIONAL MATCH (sub)-[:RESTRICTED_BY]->(scl:Clause)
-    WHERE scl IS NOT NULL AND scl.clause_type IN [
-        'Anti-Trust / Regulatory', 'Governance / Fraud',
-        'Exclusivity & Non-Compete', 'Liquidated Damages'
-    ]
-    WITH t, company_clauses, collect(DISTINCT scl) AS sub_clauses
-
-    WITH t, company_clauses + sub_clauses AS all_clauses
-    UNWIND (CASE WHEN size(all_clauses) > 0 THEN all_clauses ELSE [null] END) AS cl
-    OPTIONAL MATCH (cl)-[:EXTRACTED_FROM]->(dc:DocumentChunk) WHERE cl IS NOT NULL
-    OPTIONAL MATCH (cl)-[:RESTRICTED_BY]->(rf:RiskFactor) WHERE cl IS NOT NULL
-    RETURN
-        cl {.id, .title, .clause_type, .financial_exposure_usd, .summary} AS clause,
-        collect(DISTINCT dc {.id, .source_doc, .page, .text}) AS evidence_chunks,
-        collect(DISTINCT rf {.id, .category, .severity, .description}) AS risk_factors
+    OPTIONAL MATCH (c)-[:DERIVED_FROM]->(dc:DocumentChunk)
+    OPTIONAL MATCH (c)-[:RESTRICTS_MARKET]->(m:Market)
+    OPTIONAL MATCH (c)-[:REVOKES]->(gc:GovContract)
+    OPTIONAL MATCH (c)-[:NAMES_COMPETITOR]->(comp:Company)
+    OPTIONAL MATCH (c)-[:COVERS_COMPONENT]->(k:Component)
+    RETURN ent {.id, .name} AS affected_entity,
+           a {.id, .title, .type, .effectiveDate, .expiryDate, .totalValueUSD} AS agreement,
+           c {.id, .title, .clauseType, .section, .text, .thresholdPct, .penaltyUSD,
+              .minAnnualPurchaseUSD, .durationMonths, .severity, .autoRenew, .renewalDate,
+              .noticeDeadline, .annualFeeUSD, .exitPenaltyUSD, .valueAtRiskUSD,
+              financial_exposure_usd: coalesce(
+                  c.valueAtRiskUSD,
+                  gc.valueUSD,
+                  c.penaltyUSD,
+                  c.exitPenaltyUSD,
+                  (coalesce(c.annualFeeUSD, 0) * coalesce(c.renewalTermMonths, 12) / 12),
+                  (coalesce(c.minAnnualPurchaseUSD, 0) * coalesce(c.durationMonths, 12) / 12),
+                  c.financial_exposure_usd,
+                  0
+              ),
+              summary: coalesce(c.text, c.summary, c.title)} AS clause,
+           m {.id, .name, .sector} AS market,
+           gc {.id, .title, .valueUSD, .contractNo} AS gov_contract,
+           comp {.id, .name} AS named_competitor,
+           k {.id, .name, .criticality} AS covered_component,
+           collect(DISTINCT dc {.id, .docId, .page, .text}) AS evidence_chunks
     """
-    linked_results = run_cypher(linked_query, {"target": target_company})
+    clause_results = run_cypher(clause_query, {"target": target_company})
 
-    # ── Part B: Key named clauses that may not be graph-linked ──
-    named_query = """
-    MATCH (cl:Clause)
-    WHERE cl.id IN ['CL-819', 'CL-205']
-    OPTIONAL MATCH (cl)-[:EXTRACTED_FROM]->(dc:DocumentChunk)
-    OPTIONAL MATCH (cl)-[:RESTRICTED_BY]->(rf:RiskFactor)
-    OPTIONAL MATCH (rf)-[:EXTRACTED_FROM]->(rdc:DocumentChunk)
-    RETURN
-        cl {.id, .title, .clause_type, .financial_exposure_usd, .summary} AS clause,
-        collect(DISTINCT dc {.id, .source_doc, .page, .text}) AS evidence_chunks,
-        collect(DISTINCT rf {.id, .category, .severity, .description}) AS risk_factors,
-        collect(DISTINCT rdc {.id, .source_doc, .page, .text}) AS risk_evidence
+    # ── Part B: Market Cap Overlap Check ──
+    market_cap_query = """
+    MATCH (d:Deal)-[:TARGET]->(t:Company)
+    WHERE t.name = $target OR t.name CONTAINS $target OR $target CONTAINS t.name
+    MATCH (d)-[:ACQUIRER]->(acq:Company)
+    MATCH (c:Clause {clauseType:'HORIZONTAL_MARKET_CAP'})-[:RESTRICTS_MARKET]->(m:Market)
+    MATCH (acq)-[:IS_SUBSIDIARY_OF*0..3]->(par)<-[:IS_SUBSIDIARY_OF*0..3]-(sib:Company)
+    MATCH (sib)-[ms:HAS_MARKET_SHARE]->(m)
+    WHERE sib <> t AND sib <> acq AND ms.pct > c.thresholdPct
+    RETURN c.id AS clause_id, sib.name AS sibling_violator, ms.pct AS market_share, c.thresholdPct AS cap_pct, par.name AS parent_firm
     """
-    named_results = run_cypher(named_query, {"target": target_company})
+    market_cap_results = run_cypher(market_cap_query, {"target": target_company})
 
-    # ── Part C: Supplier-linked clauses affecting the target supply chain ──
-    supplier_clause_query = """
-    MATCH (sup:Company)-[:SUPPLIES_TO]->(t:Company {name: $target})
-    MATCH (sup)-[:RESTRICTED_BY]->(cl:Clause)
-    WHERE cl.clause_type IN [
-        'Anti-Trust / Regulatory', 'Governance / Fraud',
-        'Exclusivity & Non-Compete', 'Liquidated Damages',
-        'Change of Control'
-    ]
-    OPTIONAL MATCH (cl)-[:EXTRACTED_FROM]->(dc:DocumentChunk)
-    OPTIONAL MATCH (cl)-[:RESTRICTED_BY]->(rf:RiskFactor)
-    RETURN
-        sup {.id, .name} AS supplier,
-        cl {.id, .title, .clause_type, .financial_exposure_usd, .summary} AS clause,
-        collect(DISTINCT dc {.id, .source_doc, .page, .text}) AS evidence_chunks,
-        collect(DISTINCT rf {.id, .category, .severity, .description}) AS risk_factors
+    # ── Part C: Federal Contract Revocation Check ──
+    revocation_query = """
+    MATCH (d:Deal)-[:TARGET]->(t:Company)
+    WHERE t.name = $target OR t.name CONTAINS $target OR $target CONTAINS t.name
+    MATCH (d)-[:ACQUIRER]->(acq:Company)
+    MATCH (c:Clause {clauseType:'FEDERAL_CONTRACT_REVOCATION'})-[:NAMES_COMPETITOR]->(comp:Company)
+    MATCH (c)-[:REVOKES]->(gc:GovContract)
+    MATCH (acq)-[:IS_SUBSIDIARY_OF*0..3]->(anc)-[s:HOLDS_STAKE_IN]->(comp)
+    RETURN c.id AS clause_id, gc.title AS contract_title, gc.valueUSD AS value_at_risk, comp.name AS competitor_name, anc.name AS acquirer_affiliate, s.pct AS stake_pct
     """
-    supplier_results = run_cypher(supplier_clause_query, {"target": target_company})
+    revocation_results = run_cypher(revocation_query, {"target": target_company})
 
-    # ── Merge and deduplicate ──
-    seen_clause_ids = set()
+    # ── Part D: SLA Auto-Renewal Notice Window Check ──
+    sla_query = """
+    MATCH (d:Deal)-[:TARGET]->(t:Company)
+    WHERE t.name = $target OR t.name CONTAINS $target OR $target CONTAINS t.name
+    MATCH (c:Clause {clauseType:'AUTO_SLA_RENEWAL_IP_LOCKIN'})
+    WHERE c.noticeDeadline < coalesce(d.announcedDate, '2026-10-31')
+    RETURN c.id AS clause_id, c.noticeDeadline AS missed_deadline, c.renewalDate AS renewal_date, c.annualFeeUSD AS annual_fee, c.renewalTermMonths AS term_months
+    """
+    sla_results = run_cypher(sla_query, {"target": target_company})
+
+    # ── Part E: Governance Attestation Failures ──
+    attestation_query = """
+    MATCH (p:Person)-[:DIRECTOR_OF]->(t:Company)
+    WHERE t.name = $target OR t.name CONTAINS $target OR $target CONTAINS t.name
+    MATCH (p)-[:FILED]->(d:Disclosure {attestsNoConflict:true})
+    MATCH (p)-[:RELATED_TO]-(rp:Person)-[s:HOLDS_STAKE_IN]->(v:Company)-[:SUPPLIES_TO]->(t)
+    WHERE NOT EXISTS { (d)-[:DECLARES]->(v) }
+    OPTIONAL MATCH (d)-[:DERIVED_FROM]->(dc:DocumentChunk)
+    RETURN p.name AS director, rp.name AS relative, v.name AS supplier, s.pct AS stake_pct,
+           collect(DISTINCT dc {.id, .docId, .page, .text}) AS evidence_chunks
+    """
+    attestation_results = run_cypher(attestation_query, {"target": target_company})
+
+    # ── Part F: Dual-Fiduciary Conflicts ──
+    dual_fiduciary_query = """
+    MATCH (p:Person)-[:DIRECTOR_OF {type:'NON_EXECUTIVE'}]->(t:Company)
+    WHERE t.name = $target OR t.name CONTAINS $target OR $target CONTAINS t.name
+    MATCH (p)-[s:HOLDS_STAKE_IN]->(v:Company)-[:SUPPLIES_TO]->(t)
+    WHERE NOT EXISTS { (p)-[:FILED]->(:Disclosure)-[:DECLARES]->(v) }
+    OPTIONAL MATCH (tx:Transaction)-[:APPROVED_BY]->(p) WHERE (tx)-[:WITH_VENDOR]->(v)
+    OPTIONAL MATCH (v)-[:DERIVED_FROM]->(dc:DocumentChunk)
+    RETURN p.name AS director, v.name AS vendor, s.pct AS stake_pct, tx.amountUSD AS approved_amount,
+           collect(DISTINCT dc {.id, .docId, .page, .text}) AS evidence_chunks
+    """
+    dual_fiduciary_results = run_cypher(dual_fiduciary_query, {"target": target_company})
+
+    # ── Merge and format all risks ──
     all_risks = []
+    seen_ids = set()
 
-    for source_label, results in [
-        ("direct_company_or_subsidiary", linked_results),
-        ("named_key_clause", named_results),
-        ("supplier_chain", supplier_results),
-    ]:
-        for row in results:
-            clause = row.get("clause") or {}
-            if clause is None or clause.get("id") is None:
-                continue
-            cid = clause["id"]
-            if cid in seen_clause_ids:
-                continue
-            seen_clause_ids.add(cid)
+    for row in clause_results:
+        clause = row.get("clause") or {}
+        cid = clause.get("id")
+        if not cid or cid in seen_ids:
+            continue
+        seen_ids.add(cid)
 
-            evidence = row.get("evidence_chunks") or []
-            # Also include risk_evidence if present (from named clauses)
-            risk_evidence = row.get("risk_evidence") or []
-            combined_evidence = evidence + [
-                e for e in risk_evidence if e not in evidence
-            ]
-            # Remove null entries
-            combined_evidence = [e for e in combined_evidence if e and e.get("id")]
+        category = "Secondary Restrictive Covenant"
+        ctype = clause.get("clauseType", "")
+        if "MARKET_CAP" in ctype or "REVOCATION" in ctype:
+            category = "Anti-Trust / Regulatory"
+        elif "SLA" in ctype or "EXCLUSIVITY" in ctype:
+            category = "Non-Compete / Exclusivity"
+        elif "ATTESTATION" in ctype or "FIDUCIARY" in ctype:
+            category = "Governance / Conflict of Interest"
 
+        all_risks.append({
+            "source": "contract_clause",
+            "category": category,
+            "clause": clause,
+            "agreement": row.get("agreement"),
+            "affected_entity": row.get("affected_entity"),
+            "market": row.get("market"),
+            "gov_contract": row.get("gov_contract"),
+            "named_competitor": row.get("named_competitor"),
+            "covered_component": row.get("covered_component"),
+            "evidence_chunks": [e for e in (row.get("evidence_chunks") or []) if e and e.get("id")],
+        })
+
+    # Add governance attestation findings as distinct risks if not already represented
+    for row in attestation_results:
+        risk_id = f"GOV_ATTEST_{row['director'].replace(' ', '_')}"
+        if risk_id not in seen_ids:
+            seen_ids.add(risk_id)
             all_risks.append({
-                "source": source_label,
-                "supplier": row.get("supplier"),
-                "clause": clause,
-                "evidence_chunks": combined_evidence,
-                "existing_risk_factors": [
-                    rf for rf in (row.get("risk_factors") or []) if rf and rf.get("id")
-                ],
+                "source": "governance_audit",
+                "category": "Governance / Fraud – Director Attestation Failure",
+                "clause": {
+                    "id": risk_id,
+                    "title": f"Governance Attestation Failure ({row['director']})",
+                    "clauseType": "GOVERNANCE_ATTESTATION_FAILURE",
+                    "financial_exposure_usd": 18_000_000,
+                    "summary": f"Director {row['director']} attested no conflicts, but relative {row['relative']} holds {row['stake_pct']}% of supplier {row['supplier']}.",
+                },
+                "evidence_chunks": [e for e in (row.get("evidence_chunks") or []) if e and e.get("id")],
             })
 
-    # Total financial exposure
+    # Add dual-fiduciary findings
+    for row in dual_fiduciary_results:
+        risk_id = f"DUAL_FID_{row['director'].replace(' ', '_')}"
+        if risk_id not in seen_ids:
+            seen_ids.add(risk_id)
+            amt = row.get("approved_amount") or 1_800_000
+            all_risks.append({
+                "source": "board_audit",
+                "category": "Governance – Dual Fiduciary Conflict",
+                "clause": {
+                    "id": risk_id,
+                    "title": f"Dual-Fiduciary Conflict ({row['director']})",
+                    "clauseType": "DUAL_FIDUCIARY",
+                    "financial_exposure_usd": amt,
+                    "summary": f"Non-executive director {row['director']} holds {row['stake_pct']}% in tier-2 vendor {row['vendor']} and approved ${amt:,.0f} fee uplift without disclosure.",
+                },
+                "evidence_chunks": [e for e in (row.get("evidence_chunks") or []) if e and e.get("id")],
+            })
+
     total_exposure = sum(
         (r["clause"].get("financial_exposure_usd") or 0) for r in all_risks
     )
@@ -332,6 +441,9 @@ def analyze_secondary_and_antitrust_risks(
         "risks_found": len(all_risks),
         "total_clause_exposure_usd": total_exposure,
         "risk_details": all_risks,
+        "market_cap_breaches": market_cap_results,
+        "contract_revocations": revocation_results,
+        "sla_deadline_warnings": sla_results,
         "analysis_timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -387,7 +499,8 @@ def calculate_and_store_risk_factor(
 
     # ── Write-back to Neo4j Aura ──
     write_query = """
-    MATCH (c:Company {id: $company_id})
+    OPTIONAL MATCH (c:Company {id: $company_id})
+    OPTIONAL MATCH (deal:Deal) WHERE (deal)-[:TARGET]->(c)
     OPTIONAL MATCH (cl:Clause {id: $clause_id})
     OPTIONAL MATCH (dc:DocumentChunk {id: $source_chunk_id})
     MERGE (r:RiskFactor {id: $risk_id})
@@ -403,7 +516,12 @@ def calculate_and_store_risk_factor(
         r.status = 'ACTIVE',
         r.updated_by = 'DealShield_GoogleADK_Agent',
         r.calculated_at = toString(datetime())
-    MERGE (c)-[:HAS_CALCULATED_RISK {score: $risk_score, severity: $severity}]->(r)
+    FOREACH (_ IN CASE WHEN c IS NOT NULL THEN [1] ELSE [] END |
+        MERGE (c)-[:HAS_CALCULATED_RISK {score: $risk_score, severity: $severity}]->(r)
+    )
+    FOREACH (_ IN CASE WHEN deal IS NOT NULL THEN [1] ELSE [] END |
+        MERGE (deal)-[:HAS_CALCULATED_RISK {score: $risk_score, severity: $severity}]->(r)
+    )
     FOREACH (_ IN CASE WHEN cl IS NOT NULL THEN [1] ELSE [] END |
         MERGE (cl)-[:RESTRICTED_BY {impact: 'Triggers Calculated Risk'}]->(r)
     )
@@ -466,14 +584,14 @@ Your task: Call the `analyze_change_of_control_graphrag` tool to detect hidden
 related-party conflicts triggered by Change-of-Control clauses in the M&A deal.
 
 ALWAYS call the tool with the target company name provided in the user's query.
-If no target is specified, default to "TargetTech Inc.".
+If no target is specified, default to "Northwind Microsystems Inc.".
 
 After receiving the tool results, provide a structured summary including:
-1. Number of Change-of-Control clauses found
+1. Number of Change-of-Control clauses found (e.g. poison pills, vendor lock-ins).
 2. For each related-party conflict detected:
    - Director name and role
    - Related party (spouse/family) and their hidden beneficial ownership
-   - Full holding company chain (e.g. Elena Rostova-Vance → Vanguard Pacific Holdings → Apex MicroSystems LLC)
+   - Full holding company chain (e.g. Priya Raman → Meridian Holdings Ltd (BVI) → Silverline Components Ltd)
    - Annual supplier contract value
    - CoC termination penalty
    - DocumentChunk citations (source doc, page, relevant text excerpt)
@@ -492,16 +610,13 @@ secondary_risk_agent = LlmAgent(
     instruction="""You are DealShield's Secondary & Antitrust Risk Analysis specialist.
 
 Your task: Call the `analyze_secondary_and_antitrust_risks` tool to discover all
-additional restrictive clauses affecting the M&A target, beyond Change-of-Control.
-
-Focus on these clause categories:
-- Anti-Trust / Regulatory (e.g., DoD contract revocation risks)
-- Governance / Fraud (e.g., undisclosed attestation breaches)
-- Exclusivity & Non-Compete
-- Liquidated Damages
+additional restrictive clauses affecting the M&A target across:
+- Anti-Trust / Regulatory (Horizontal Market Cap >25%, DoD Contract Revocation)
+- Non-Compete & Exclusivity (Sole-source ASIC take-or-pay, Missed SLA auto-renewal deadlines)
+- Governance & Attestation (Director conflict certification failures, Dual fiduciaries)
 
 ALWAYS call the tool with the same target company as the previous agent.
-If no target is specified, default to "TargetTech Inc.".
+If no target is specified, default to "Northwind Microsystems Inc.".
 
 After receiving results, summarize:
 1. Total number of additional risk clauses found
@@ -509,8 +624,7 @@ After receiving results, summarize:
 3. Any existing RiskFactor nodes already in the graph
 4. Total cumulative exposure from all secondary risks
 
-Highlight the DoD Anti-Trust Restriction (CL-819, $45M) and Board Attestation
-Breach (CL-205, $18.5M) if found.
+Highlight the DoD Contract Revocation ($120M / $85M) and Sole-Source Exclusivity commitments if found.
 """,
     tools=[analyze_secondary_and_antitrust_risks],
 )
@@ -525,46 +639,12 @@ Your task: Based on the conflict and risk data discovered by the previous agents
 in this conversation, call `calculate_and_store_risk_factor` to score and persist
 each material risk back to Neo4j Aura.
 
-You MUST calculate and store these specific risk factors:
+For each material finding identified:
+1. Extract the company_id, clause_id, category, base_penalty_usd, annual_contract_usd,
+   is_related_party_conflict flag, holding_hops, and concise rationale.
+2. Call `calculate_and_store_risk_factor` to persist the RiskFactor node to Neo4j.
 
-**Risk 1 – CoC Related-Party Conflict (RISK-CALC-001)**:
-- company_id: "COMP-002"
-- clause_id: "CL-402"
-- risk_id: "RISK-CALC-001"
-- category: "Undisclosed Related-Party + Change-of-Control"
-- base_penalty_usd: 15000000 (the $15M CoC termination penalty)
-- annual_contract_usd: 18500000 (the $18.5M annual supplier value)
-- is_related_party_conflict: true
-- holding_hops: 2 (Elena → Vanguard Pacific → Apex MicroSystems)
-- rationale: "Director Marcus Vance's spouse Elena Rostova-Vance holds 42% of Vanguard Pacific Holdings, which owns 65% of sole-source supplier Apex MicroSystems LLC. The $18.5M annual supply contract combined with the $15M CoC poison-pill penalty creates $33.5M total exposure."
-- source_chunk_id: "DOC-CHUNK-101"
-
-**Risk 2 – DoD Anti-Trust (RISK-CALC-002)**:
-- company_id: "COMP-002"
-- clause_id: "CL-819"
-- risk_id: "RISK-CALC-002"
-- category: "Anti-Trust / Regulatory – DoD Contract Revocation"
-- base_penalty_usd: 45000000
-- annual_contract_usd: 0
-- is_related_party_conflict: false
-- holding_hops: 0
-- rationale: "Acquirer Horizon Private Equity's existing defense portfolio creates >25% market share overlap, triggering immediate revocation of TargetTech's $45M DoD contract per Clause 9.4."
-- source_chunk_id: "DOC-CHUNK-103"
-
-**Risk 3 – Board Attestation Breach (RISK-CALC-003)**:
-- company_id: "COMP-002"
-- clause_id: "CL-205"
-- risk_id: "RISK-CALC-003"
-- category: "Governance / Fraud – Director Attestation Failure"
-- base_penalty_usd: 18500000
-- annual_contract_usd: 0
-- is_related_party_conflict: true
-- holding_hops: 2
-- rationale: "Marcus Vance failed to disclose spousal beneficial ownership in sole-source vendor Apex MicroSystems via Vanguard Pacific Holdings in annual director conflict attestation. Exposure equals the full $18.5M contract value."
-- source_chunk_id: "DOC-CHUNK-102"
-
-Call the tool THREE times – once for each risk. After all writes complete,
-provide a final deal risk summary table with columns:
+After all writes complete, provide a final deal risk summary table with columns:
 Risk ID | Category | Severity | Score | Total Exposure | Deal Deduction
 
 Calculate the total deal deduction across all risks.
@@ -599,6 +679,7 @@ Provide professional, concise responses. Use markdown.""",
     ],
 )
 
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Neo4j Agent Memory Setup
 # ═══════════════════════════════════════════════════════════════════════════
@@ -619,7 +700,7 @@ def create_memory_service() -> Neo4jMemoryService | None:
         memory_service = Neo4jMemoryService(memory_client=client)
         return memory_service
     except Exception as e:
-        print(f"⚠ Neo4j Agent Memory unavailable (workflow continues without it): {e}")
+        print(f"[WARNING] Neo4j Agent Memory unavailable (workflow continues without it): {e}")
         return None
 
 
@@ -643,7 +724,7 @@ def create_runner() -> tuple[Runner, InMemorySessionService, Neo4jMemoryService 
 # Async Execution
 # ═══════════════════════════════════════════════════════════════════════════
 async def run_dealshield_analysis(
-    target_company: str = "TargetTech Inc.",
+    target_company: str = "Northwind Microsystems Inc.",
     user_id: str = "analyst_01",
 ) -> list[dict]:
     """Execute the full DealShield pipeline and return all agent events."""
@@ -692,7 +773,7 @@ async def run_dealshield_analysis(
     return events
 
 
-def run_sync(target_company: str = "TargetTech Inc.") -> list[dict]:
+def run_sync(target_company: str = "Northwind Microsystems Inc.") -> list[dict]:
     """Synchronous wrapper for CLI / notebook usage."""
     return asyncio.run(run_dealshield_analysis(target_company))
 
@@ -707,13 +788,12 @@ if __name__ == "__main__":
     print("=" * 80)
     print()
 
-    events = run_sync("TargetTech Inc.")
+    events = run_sync("Northwind Microsystems Inc.")
 
     print(f"\n{'=' * 80}")
     print(f"  Pipeline complete – {len(events)} events captured")
     print(f"{'=' * 80}")
 
-    # Print final agent outputs
     for event in events:
         if event.get("content"):
             content = event["content"]
