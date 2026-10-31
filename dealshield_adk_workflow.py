@@ -40,7 +40,7 @@ NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", os.getenv("GEMINI_API_KEY", ""))
-LLM_MODEL = "gemini-2.5-flash"
+LLM_MODEL = "gemini-3.1-flash-lite"
 APP_NAME = "dealshield"
 
 # Ensure Gemini API key is available for google-genai
@@ -436,6 +436,7 @@ def calculate_and_store_risk_factor(
         "risk_id": risk_id,
         "company_id": company_id,
         "clause_id": clause_id,
+        "category": category,
         "calculation": {
             "base_penalty_usd": base_penalty_usd,
             "annual_contract_usd": annual_contract_usd,
@@ -582,6 +583,22 @@ dealshield_coordinator = SequentialAgent(
 )
 
 
+# ── Chat Assistant: Interactive Agent ──
+chat_agent = LlmAgent(
+    name="DealShield_Chat_Assistant",
+    model=LLM_MODEL,
+    instruction="""You are the DealShield AI Assistant, an expert M&A conversational agent.
+Your goal is to answer questions about the graph database, deal risks, or conflict rings.
+You can use the three available tools to perform real-time analysis. Use `run_cypher` to query any general node/edge information if the predefined tools are insufficient.
+Provide professional, concise responses. Use markdown.""",
+    tools=[
+        analyze_change_of_control_graphrag,
+        analyze_secondary_and_antitrust_risks,
+        calculate_and_store_risk_factor,
+        run_cypher,
+    ],
+)
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Neo4j Agent Memory Setup
 # ═══════════════════════════════════════════════════════════════════════════
@@ -593,7 +610,7 @@ def create_memory_service() -> Neo4jMemoryService | None:
         settings = MemorySettings(
             neo4j={
                 "uri": NEO4J_URI,
-                "user": NEO4J_USERNAME,
+                "username": NEO4J_USERNAME,
                 "password": NEO4J_PASSWORD,
                 "database": NEO4J_DATABASE,
             }

@@ -67,6 +67,11 @@ class RiskScoreRequest(BaseModel):
     source_chunk_id: str
 
 
+class ChatRequest(BaseModel):
+    session_id: str
+    message: str
+
+
 # ─── Health & Stats ──────────────────────────────────────────────────────
 @app.get("/api/health")
 def health_check():
@@ -227,6 +232,64 @@ def run_full_pipeline(req: TargetRequest):
                 "high_count": sum(1 for r in scored_risks if r["calculation"]["severity"] == "HIGH"),
                 "medium_count": sum(1 for r in scored_risks if r["calculation"]["severity"] == "MEDIUM"),
             },
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+from google.adk.sessions import InMemorySessionService
+global_session_service = InMemorySessionService()
+
+# ─── Chatbot API ────────────────────────────────────────────────────────
+@app.post("/api/chat")
+async def chat_endpoint(req: ChatRequest):
+    """Conversational API using DealShield_Chat_Assistant."""
+    try:
+        from dealshield_adk_workflow import chat_agent, create_memory_service
+        from google.adk.runners import Runner
+        from google.genai import types
+
+        memory_service = create_memory_service()
+        
+        session = await global_session_service.get_session(
+            app_name="DealShield", user_id="demo_user", session_id=req.session_id
+        )
+        if not session:
+            await global_session_service.create_session(
+                app_name="DealShield", user_id="demo_user", session_id=req.session_id
+            )
+
+        runner = Runner(
+            agent=chat_agent,
+            app_name="DealShield",
+            session_service=global_session_service,
+        )
+        
+        # In a real app we'd load the session properly, but for demo we just run it
+        # Runner handles history if session_id is provided and memory_service works
+        user_message = types.Content(
+            role="user",
+            parts=[types.Part(text=req.message)]
+        )
+        
+        events = []
+        async for event in runner.run_async(
+            user_id="demo_user",
+            session_id=req.session_id,
+            new_message=user_message
+        ):
+            events.append(event)
+        
+        response_text = ""
+        for e in events:
+            if getattr(e, "author", "") == "DealShield_Chat_Assistant" and getattr(e, "content", None):
+                for part in (e.content.parts or []):
+                    if getattr(part, "text", None):
+                        response_text += part.text + "\n"
+        
+        return {
+            "response": response_text.strip() or "No response from agent.",
+            "session_id": req.session_id
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

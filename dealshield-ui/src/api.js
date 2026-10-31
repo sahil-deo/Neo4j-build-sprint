@@ -53,4 +53,10 @@ export const api = {
     }),
 
   graphPresets: () => request('/graph/presets'),
+
+  chat: (payload) =>
+    request('/chat', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 };

@@ -1,0 +1,74 @@
+[
+  {
+    "id": "GT1",
+    "type": "UNDISCLOSED_RPT",
+    "severity": "CRITICAL",
+    "path": "Transaction TX_SILVER_AWARD -APPROVED_BY-> Arjun Raman -RELATED_TO(SPOUSE)- Priya Raman -HOLDS_STAKE_IN-> Meridian (BVI) -HOLDS_STAKE_IN-> Silverline",
+    "indicativeExposureUSD": 15000000
+  },
+  {
+    "id": "GT2",
+    "type": "COC_POISON_PILL",
+    "clause": "CL_COC_PILL_SILVER",
+    "indicativeExposureUSD": 15000000
+  },
+  {
+    "id": "GT3",
+    "type": "COC_VENDOR_LOCKIN",
+    "clause": "CL_COC_LOCK_SILVER",
+    "indicativeExposureUSD": 21000000,
+    "note": "4.2M x 5 yrs minimum purchase commitment (obligation, not pure loss)"
+  },
+  {
+    "id": "GT4",
+    "type": "DUAL_FIDUCIARY",
+    "path": "Elena Voss -12%-> Quanta (tier-2) -SUPPLIES_TO-> Northwind; no disclosure",
+    "indicativeExposureUSD": 1800000
+  },
+  {
+    "id": "GT5",
+    "type": "GOVERNANCE_ATTESTATION_FAILURE",
+    "path": "Dana Whitfield attests none; spouse Tom Whitfield owns 35% of CoreStack (supplier)"
+  },
+  {
+    "id": "GT6",
+    "type": "AUTO_SLA_RENEWAL_IP_LOCKIN",
+    "clause": "CL_SLA_CORE",
+    "note": "Notice deadline 2026-10-17 already passed; renews 2027-01-15 for 36 months (~18M)",
+    "indicativeExposureUSD": 18000000
+  },
+  {
+    "id": "GT7",
+    "type": "SOLE_SOURCE_EXCLUSIVITY",
+    "clause": "CL_SOLE_ASIC",
+    "indicativeExposureUSD": 22000000
+  },
+  {
+    "id": "GT8",
+    "type": "HORIZONTAL_MARKET_CAP",
+    "path": "Helix Acquisition -SUBSIDIARY_OF-> Fund III <-SUBSIDIARY_OF- Orion (31% > 25%)",
+    "valueAtRiskUSD": 120000000
+  },
+  {
+    "id": "GT9",
+    "type": "FEDERAL_CONTRACT_REVOCATION",
+    "clause": "CL_REV_DOD",
+    "path": "Fund III -9%-> Vanguard (named competitor)",
+    "valueAtRiskUSD": 120000000
+  },
+  {
+    "id": "DECOY_1",
+    "expect": "NOT FLAGGED",
+    "why": "Brightpath: CFO's spouse stake was declared"
+  },
+  {
+    "id": "DECOY_2",
+    "expect": "NOT FLAGGED",
+    "why": "Atlas cap is 40% > Orion 31%"
+  },
+  {
+    "id": "DECOY_3",
+    "expect": "NOT A CoC FINDING",
+    "why": "Brightpath clause is insolvency, not equity transfer"
+  }
+]

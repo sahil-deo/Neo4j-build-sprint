@@ -304,6 +304,8 @@ function ConflictPanel({ conflict, index }) {
 
 function SecondaryRiskRow({ detail }) {
   const clause = detail.clause || {}
+  const evidence = detail.evidence_chunks || []
+
   return (
     <div className="secondary-risk-row">
       <div className="secondary-risk-header">
@@ -314,11 +316,26 @@ function SecondaryRiskRow({ detail }) {
           {fmtUsd(clause.financial_exposure_usd)}
         </span>
       </div>
-      <div className="secondary-risk-meta">
+      <div className="secondary-risk-meta" style={{ marginBottom: '0.5rem' }}>
         <span>Type: {clause.clause_type ?? 'N/A'}</span>
         <span className="meta-divider">•</span>
         <span>Source: {detail.source ?? 'unknown'}</span>
       </div>
+      
+      {clause.summary && (
+        <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1rem', lineHeight: 1.5 }}>
+          {clause.summary}
+        </div>
+      )}
+
+      {evidence.filter(d => d && d.id).map((doc, i) => (
+        <div key={i} className="evidence-card" style={{ marginTop: '0.5rem' }}>
+          <div className="evidence-source">
+            <FileText size={14} /> {doc.source_doc ?? 'Doc'} • Page {doc.page ?? '?'}
+          </div>
+          <div className="evidence-text">{doc.text ?? 'No text available'}</div>
+        </div>
+      ))}
     </div>
   )
 }

@@ -1,0 +1,83 @@
+[
+  {
+    "subgraph": "A",
+    "useCase": "CONFLICT_OF_INTEREST",
+    "id": "GA-1A",
+    "type": "UNDISCLOSED_RPT",
+    "severity": "CRITICAL",
+    "path": "GA_TX_AWARD -APPROVED_BY-> Arjun Raman -RELATED_TO(SPOUSE)- Priya Raman -HOLDS_STAKE_IN(100%)-> Meridian (BVI) -HOLDS_STAKE_IN(70%)-> Silverline",
+    "indicativeExposureUSD": 48000000
+  },
+  {
+    "subgraph": "A",
+    "useCase": "CONFLICT_OF_INTEREST",
+    "id": "GA-1B",
+    "type": "GOVERNANCE_ATTESTATION_FAILURE",
+    "path": "Dana Whitfield attests no conflict; spouse Tom Whitfield holds 8% of supplier Silverline"
+  },
+  {
+    "subgraph": "A",
+    "useCase": "CONFLICT_OF_INTEREST",
+    "id": "GA-1C",
+    "type": "DUAL_FIDUCIARY",
+    "path": "Elena Voss (NED, Procurement Chair) holds 12% of tier-2 vendor Silverline and approved the 1.8M renewal fee",
+    "indicativeExposureUSD": 1800000
+  },
+  {
+    "subgraph": "A",
+    "useCase": "CHANGE_OF_CONTROL",
+    "id": "GA-2A",
+    "type": "COC_POISON_PILL",
+    "clause": "GA_CL_COC_PILL",
+    "indicativeExposureUSD": 15000000,
+    "insiderLookThroughPct": 90
+  },
+  {
+    "subgraph": "A",
+    "useCase": "CHANGE_OF_CONTROL",
+    "id": "GA-2B",
+    "type": "COC_VENDOR_LOCKIN",
+    "clause": "GA_CL_COC_LOCK",
+    "indicativeExposureUSD": 21000000,
+    "note": "obligation (4.2M x 5y), not pure loss"
+  },
+  {
+    "subgraph": "B",
+    "useCase": "ANTITRUST_REGULATORY",
+    "id": "GB-3A",
+    "type": "HORIZONTAL_MARKET_CAP",
+    "clause": "GB_CL_CAP",
+    "path": "Orion (31%) > 25% cap; becomes Aurora's parent at close",
+    "valueAtRiskUSD": 85000000
+  },
+  {
+    "subgraph": "B",
+    "useCase": "ANTITRUST_REGULATORY",
+    "id": "GB-3B",
+    "type": "FEDERAL_CONTRACT_REVOCATION",
+    "clause": "GB_CL_REVOKE",
+    "path": "Clause names Orion as direct competitor; Orion is the acquirer",
+    "valueAtRiskUSD": 85000000
+  },
+  {
+    "subgraph": "B",
+    "useCase": "NONCOMPETE_EXCLUSIVITY",
+    "id": "GB-4A",
+    "type": "SOLE_SOURCE_EXCLUSIVITY",
+    "clause": "GB_CL_SOLE_ASIC",
+    "indicativeExposureUSD": 22000000
+  },
+  {
+    "subgraph": "B",
+    "useCase": "NONCOMPETE_EXCLUSIVITY",
+    "id": "GB-4B",
+    "type": "AUTO_SLA_RENEWAL_IP_LOCKIN",
+    "clause": "GB_CL_SLA",
+    "note": "notice deadline 2026-10-17 missed; renews 2027-01-15 for 36 months before closing 2027-02-28",
+    "indicativeExposureUSD": 18000000
+  },
+  {
+    "subgraph": "B",
+    "expect": "NO conflict-of-interest or change-of-control findings (negative control)"
+  }
+]

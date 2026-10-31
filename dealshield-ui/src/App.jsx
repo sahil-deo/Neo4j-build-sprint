@@ -6,6 +6,7 @@ import Hero from './components/Hero'
 import RiskAnalysisTab from './components/RiskAnalysisTab'
 import GraphExplorerTab from './components/GraphExplorerTab'
 import AgentEventsTab from './components/AgentEventsTab'
+import Chatbot from './components/Chatbot'
 
 const TABS = [
   { id: 'analysis', label: 'Risk Analysis', icon: Activity },
@@ -134,6 +135,7 @@ export default function App() {
         {activeTab === 'graph' && <GraphExplorerTab />}
         {activeTab === 'events' && <AgentEventsTab pipelineResult={pipelineResult} />}
       </main>
+      <Chatbot />
     </div>
   )
 }
