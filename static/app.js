@@ -705,7 +705,7 @@ function renderResults(result) {
         <div style="margin-bottom: 1rem;">
           <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 4px;">
             <span style="color: var(--text-secondary);">Risk Score: <strong>${calc.risk_score || 0} / 100</strong></span>
-            <span style="color: var(--text-muted);">${isRp ? 'Related-Party Conflict' : 'Regulatory / Contractual'}</span>
+            <span style="color: ${isRp ? 'var(--accent-amber)' : 'var(--text-muted)'}; font-weight: 600;">${isRp ? 'Conflict of Interest' : 'Regulatory / Contractual'}</span>
           </div>
           <div style="background: var(--bg-surface); height: 6px; border-radius: 3px; overflow: hidden;">
             <div style="width: ${Math.min(100, calc.risk_score || 0)}%; height: 100%; background: ${calc.severity === 'CRITICAL' ? 'var(--accent-red)' : calc.severity === 'HIGH' ? 'var(--accent-amber)' : 'var(--accent-blue)'}; border-radius: 3px;"></div>
